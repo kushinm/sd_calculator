@@ -4,6 +4,8 @@ import matplotlib
 import pandas as pd
 matplotlib.use('Agg')
 import numpy as np
+import scipy
+from scipy.optimize import linear_sum_assignment
 from flask import Flask, render_template_string, request
 from flask_cors import CORS
 from flask import jsonify
@@ -32,18 +34,16 @@ def render_graph(x, y):
     svg_data = buf.getvalue().decode()
     buf.close()
     plt.close(fig)
-
     # Add width and height attributes to the SVG data
-    width = 300
-    height = 200
+    width = 500
+    height = 350
     svg_data = svg_data.replace('<svg ', f'<svg width="{width}" height="auto" ')
-    
     return f'''
     <!DOCTYPE html>
     <html>
     <body>
     <div>
-        {svg_data}
+    {svg_data}
     </div>
     </body>
     </html>
@@ -67,6 +67,50 @@ def upload():
         return jsonify({'param1': param1, 'param2': param2, 'graph_html': graph_html})
 
     return jsonify({'error': 'Invalid file format'}), 400
+
+@app.route('/compute_matrix', methods=['POST'])
+def compute_matrix():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+
+    if file and file.filename.endswith('.csv'):
+        df = pd.read_csv(file)
+        ### ignore the first column
+        df = df.iloc[:10, 1:]
+        ratings = df.to_numpy()
+        # Debug: Print the shape of the ratings matrix
+        result = assignment_solve(ratings, method="balanced")
+        return jsonify({'matrix_result': result.tolist()})
+
+    return jsonify({'error': 'Invalid file format'}), 400
+
+def assignment_solve(ratings, method="balanced"):
+    m, n = ratings.shape
+    print("hello")
+    assert m <= n, "More concepts than colors, assignment impossible!"
+
+    if method == "isolated":
+        merit_matrix = ratings
+    elif method == "balanced":
+        t = 1
+        merit_matrix = np.zeros((m, n))
+        for i in range(m):
+            for j in range(n):
+                merit_matrix[i, j] = ratings[i, j] - t * ratings[np.arange(m) != i, j].max()
+    elif method == "baseline":
+        merit_matrix = np.zeros((m, n))
+        for i in range(m):
+            for j in range(n):
+                merit_matrix[i, j] = -abs(ratings[i, j] - ratings[np.arange(m) != i, j].max())
+    else:
+        assert False, "unknown method in assignment problem"
+
+    row_ind, col_ind = linear_sum_assignment(merit_matrix, maximize=True)
+    return col_ind
 
 if __name__ == '__main__':
     app.run(debug=True)
